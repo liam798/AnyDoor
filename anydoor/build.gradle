@@ -1,0 +1,45 @@
+plugins {
+    alias(libs.plugins.android.library)
+    alias(libs.plugins.kotlin.android)
+    id 'maven-publish'
+}
+android {
+    namespace 'com.anydoor'
+    compileSdk 35
+    defaultConfig {
+        minSdk 23
+        consumerProguardFiles 'consumer-rules.pro'
+        testInstrumentationRunner 'android.test.InstrumentationTestRunner'
+    }
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+    kotlinOptions { jvmTarget = '17' }
+    testOptions { unitTests.includeAndroidResources = true }
+    // 直接编译文档示例，避免维护测试副本；不进入主源码及发布物。
+    sourceSets.test.java.srcDir rootProject.file('docs/examples/ads')
+    publishing { singleVariant('release') { withSourcesJar() } }
+}
+dependencies {
+    implementation libs.androidx.annotation
+    testImplementation libs.junit
+    testImplementation libs.robolectric
+}
+afterEvaluate {
+    tasks.named('releaseSourcesJar') {
+        // Kotlin 与 Android 源集可能重复收集同一路径，只保留一份源码条目。
+        duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+        eachFile { duplicatesStrategy = DuplicatesStrategy.EXCLUDE }
+    }
+    publishing {
+        publications {
+            release(MavenPublication) {
+                from components.release
+                groupId = 'com.anydoor'
+                artifactId = 'anydoor'
+                version = libs.versions.anydoor.get()
+            }
+        }
+    }
+}

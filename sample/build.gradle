@@ -1,0 +1,27 @@
+plugins {
+    alias(libs.plugins.android.application)
+    alias(libs.plugins.kotlin.android)
+}
+android {
+    namespace 'com.anydoor.sample'
+    compileSdk 35
+    defaultConfig {
+        applicationId 'com.anydoor.sample'
+        minSdk 23
+        targetSdk 35
+        versionCode 1
+        versionName libs.versions.anydoor.get()
+        testInstrumentationRunner 'androidx.test.runner.AndroidJUnitRunner'
+        manifestPlaceholders = [anydoorProcess: providers.gradleProperty('anydoorProcess').getOrElse('com.anydoor.sample')]
+    }
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+    kotlinOptions { jvmTarget = '17' }
+}
+dependencies {
+    implementation project(':anydoor')
+    androidTestImplementation libs.androidx.test.runner
+    androidTestImplementation libs.androidx.test.junit
+}
