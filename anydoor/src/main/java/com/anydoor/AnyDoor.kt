@@ -1,6 +1,7 @@
 package com.anydoor
 
 import android.content.Context
+import android.os.DeadObjectException
 import androidx.annotation.Keep
 import android.util.Log
 import com.anydoor.internal.AnyDoorConnection
@@ -105,11 +106,13 @@ object AnyDoor {
                 if (binding.registeredWith.asBinder().isBinderAlive) {
                     binding.registeredWith.unregisterHandler(callId, binding.callback)
                 }
-                registered.remove(binding)
-                if (registered.isEmpty()) bindings.remove(callId)
             } catch (e: Exception) {
                 Log.w("AnyDoor", "处理器注销失败：$callId", e)
+                // 存活检查与事务之间也可能死亡；仅保留仍可重试的绑定。
+                if (e !is DeadObjectException && binding.registeredWith.asBinder().isBinderAlive) return
             }
+            registered.remove(binding)
+            if (registered.isEmpty()) bindings.remove(callId)
         }
     }
 }

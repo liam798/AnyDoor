@@ -4,6 +4,7 @@ import android.content.Context;
 import android.content.Intent;
 import android.os.Bundle;
 import android.os.Process;
+import android.os.Parcel;
 import android.os.ResultReceiver;
 import androidx.test.platform.app.InstrumentationRegistry;
 import androidx.test.ext.junit.runners.AndroidJUnit4;
@@ -38,6 +39,15 @@ public class CrossProcessTest {
                     resultLatch.countDown();
                 }
             };
+            // 子进程没有测试 APK 中的匿名类，传递系统类型并保留回调 Binder。
+            Parcel parcel = Parcel.obtain();
+            try {
+                receiver.writeToParcel(parcel, 0);
+                parcel.setDataPosition(0);
+                receiver = ResultReceiver.CREATOR.createFromParcel(parcel);
+            } finally {
+                parcel.recycle();
+            }
             context.startService(new Intent(context, RemoteService.class)
                 .putExtra("receiver", receiver).putExtra("input", "测试"));
             assertTrue("远程进程响应超时", resultLatch.await(15, TimeUnit.SECONDS));

@@ -42,13 +42,15 @@ fun unregisterHandler(callId: String, handler: CallHandler)
 | initialize | 幂等，仅保存应用级连接依赖，不发起 IPC |
 | 未初始化 | 除 initialize 外的方法抛 IllegalStateException |
 | 服务发现失败 | call、callAsync、registerHandler 的发现异常向调用方传播 |
+| 发现期间 Provider 死亡 | 使用非稳定 Provider 客户端；DeadObjectException 时重新获取一次，仍失败则传播异常，不重放业务 |
 | call | 返回最终业务值；无处理器、全部 Skip、Done、DoneWith(null) 均返回 null |
 | call 执行异常 | 捕获普通 Exception，记录日志并返回 null |
 | callAsync | true 仅代表中心接受入队；空白 ID、队满或提交 Exception 返回 false |
 | 异步执行异常 | 中心捕获普通 Exception 后尝试回调 null；不保证进程死亡后仍有回调 |
 | registerHandler | 同 ID、同实例、同服务下幂等；发现后的注册异常记录日志，无成功返回值 |
 | unregisterHandler | 只注销同一实例；没有绑定时无操作；旧服务已死时释放本地绑定且不发现新服务 |
-| 存活服务注销失败 | 记录日志并保留绑定，允许显式重试 |
+| 注销事务期间死亡 | 收到 DeadObjectException 或异常后确认 Binder 已死时，释放本地绑定，不发现新服务 |
+| 其他存活服务注销失败 | 记录日志并保留绑定，允许显式重试 |
 
 空白 ID 不注册、不分发。但 call、callAsync、registerHandler 仍可能先执行服务发现，
 不能依赖空白 ID 绕过初始化或发现错误。`Error` 不属于上述 Exception 处理保证。
@@ -64,6 +66,9 @@ fun unregisterHandler(callId: String, handler: CallHandler)
 
 同一 ID 的不同处理器按中心收到注册的顺序执行。并发注册没有跨进程业务优先级保证。
 调用者接收业务值，而不是 CallResult 包装对象。
+处理器调用发生通信异常时，本次分发终止，不自动尝试下一处理器；
+死亡注册会被清理，但异常不能证明该处理器尚未执行业务。
+这修正了此前在死亡异常后继续分发的行为，不改变公开方法签名或 IPC 编码。
 
 ## 生命周期
 

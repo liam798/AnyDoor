@@ -5,6 +5,8 @@ import com.anydoor.internal.ipc.CallResultProtocol
 
 import android.os.IBinder
 import android.os.Binder
+import android.os.DeadObjectException
+import android.os.RemoteException
 import android.os.Parcel
 import com.anydoor.CallResult
 import com.anydoor.internal.ipc.CallPayload
@@ -25,6 +27,82 @@ import java.lang.reflect.Proxy
 class AnyDoorServiceTest {
     private fun handler(block: () -> CallResult) = object : ICallHandler.Stub() {
         override fun onCall(id: String, arg: CallPayload?) = CallResultProtocol.encode(block())
+    }
+
+    @Test
+    fun synchronousDeathStopsDispatchAndRemovesDeadHandler() = verifyDeathStopsDispatch(false)
+
+    @Test
+    fun asynchronousDeathReturnsNullWithoutDispatchingToNextHandler() = verifyDeathStopsDispatch(true)
+
+    private fun verifyDeathStopsDispatch(async: Boolean) {
+        val registry = HandlerRegistry()
+        val worker = AnyDoorService(registry)
+        var alive = true
+        var effects = 0
+        val recipients = ArrayList<IBinder.DeathRecipient>()
+        val binder = Proxy.newProxyInstance(
+            IBinder::class.java.classLoader, arrayOf(IBinder::class.java)
+        ) { proxy, method, args ->
+            when (method.name) {
+                "isBinderAlive" -> alive
+                "linkToDeath" -> { recipients.add(args!![0] as IBinder.DeathRecipient); null }
+                "unlinkToDeath" -> recipients.remove(args!![0])
+                "hashCode" -> System.identityHashCode(proxy)
+                "equals" -> proxy === args!![0]
+                else -> null
+            }
+        } as IBinder
+        val first = object : ICallHandler.Stub() {
+            override fun asBinder() = binder
+            override fun onCall(id: String, arg: CallPayload?): CallPayload? {
+                effects++
+                alive = false
+                throw DeadObjectException()
+            }
+        }
+        val next = handler { effects++; CallResult.DoneWith("后续请求") }
+        registry.register("effect", first)
+        registry.register("effect", next)
+        try {
+            if (async) {
+                val completed = CountDownLatch(1)
+                val received = java.util.concurrent.atomic.AtomicReference<CallPayload?>(CallPayload("未回调"))
+                assertTrue(worker.callAsync("effect", null, object : ICallCallback.Stub() {
+                    override fun onResult(id: String, result: CallPayload?) {
+                        received.set(result)
+                        completed.countDown()
+                    }
+                }))
+                assertTrue(completed.await(5, TimeUnit.SECONDS))
+                assertNull(received.get())
+            } else {
+                assertThrows(DeadObjectException::class.java) { worker.call("effect", null) }
+            }
+            assertEquals(1, effects)
+            assertEquals(listOf(next), registry.snapshot("effect"))
+            assertTrue(recipients.isEmpty())
+            assertEquals("后续请求", worker.call("effect", null)?.value)
+            assertEquals(2, effects)
+        } finally {
+            worker.shutdown()
+        }
+    }
+
+    @Test
+    fun liveRemoteFailureStopsDispatchWithoutRemovingHandler() {
+        val registry = HandlerRegistry()
+        val worker = AnyDoorService(registry)
+        val failure = RemoteException("远端通信失败")
+        val first = handler { throw failure }
+        registry.register("effect", first)
+        registry.register("effect", handler { error("失败后不应继续分发") })
+        try {
+            assertSame(failure, assertThrows(RemoteException::class.java) { worker.call("effect", null) })
+            assertEquals(2, registry.snapshot("effect").size)
+        } finally {
+            worker.shutdown()
+        }
     }
 
     @Test

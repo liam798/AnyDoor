@@ -1,6 +1,8 @@
 package com.anydoor
 
 import android.os.IBinder
+import android.os.DeadObjectException
+import android.os.RemoteException
 import com.anydoor.internal.AnyDoorConnection
 import com.anydoor.internal.ipc.CallPayload
 import com.anydoor.internal.ipc.CallResultProtocol
@@ -25,6 +27,8 @@ class AnyDoorTest {
         var registrations = 0
         var removed = 0
         var failRegistration = false
+        var unregisterFailure: Exception? = null
+        var dieOnUnregister = false
         var callbackWasNull = false
         var handler: ICallHandler? = null
         private val identity = ReflectionProxy.newProxyInstance(
@@ -53,6 +57,8 @@ class AnyDoorTest {
         }
         override fun unregisterHandler(id: String, callback: ICallHandler) {
             assertSame(handler, callback)
+            if (dieOnUnregister) alive = false
+            unregisterFailure?.let { throw it }
             removed++
             handler = null
         }
@@ -146,5 +152,44 @@ class AnyDoorTest {
         endpoint.failRegistration = false
         AnyDoor.registerHandler("echo", handler)
         assertEquals(1, endpoint.registrations)
+    }
+
+    @Test
+    fun deathDuringUnregisterReleasesBindingWithoutDiscovery() {
+        for ((failure, dies) in listOf(
+            DeadObjectException() to true,
+            DeadObjectException() to false,
+            RemoteException("注销期间进程退出") to true
+        )) {
+            reset()
+            val endpoint = Endpoint().apply {
+                unregisterFailure = failure
+                dieOnUnregister = dies
+            }
+            var discoveries = 0
+            connectionField.set(null, AnyDoorConnection { discoveries++; endpoint.asBinder() })
+            val handler = CallHandler { _, _ -> CallResult.Done }
+            AnyDoor.registerHandler("echo", handler)
+            AnyDoor.unregisterHandler("echo", handler)
+            assertTrue((bindingsField.get(null) as Map<*, *>).isEmpty())
+            AnyDoor.unregisterHandler("echo", handler)
+            assertEquals(1, discoveries)
+        }
+    }
+
+    @Test
+    fun liveUnregisterFailureRetainsBindingForRetry() {
+        val endpoint = Endpoint().apply { unregisterFailure = RemoteException("临时注销失败") }
+        connectionField.set(null, AnyDoorConnection { endpoint.asBinder() })
+        val handler = CallHandler { _, _ -> CallResult.Done }
+        AnyDoor.registerHandler("echo", handler)
+        val originalCallback = endpoint.handler
+        AnyDoor.unregisterHandler("echo", handler)
+        assertEquals(1, (bindingsField.get(null) as Map<*, *>).size)
+        endpoint.unregisterFailure = null
+        assertSame(originalCallback, endpoint.handler)
+        AnyDoor.unregisterHandler("echo", handler)
+        assertEquals(1, endpoint.removed)
+        assertTrue((bindingsField.get(null) as Map<*, *>).isEmpty())
     }
 }

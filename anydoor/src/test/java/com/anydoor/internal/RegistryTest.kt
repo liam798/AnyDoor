@@ -80,6 +80,83 @@ class RegistryTest {
     }
 
     @Test
+    fun unchangedRegistryReusesSnapshotIncludingNoOpMutations() {
+        val registry = HandlerRegistry()
+        val endpoint = Endpoint()
+        registry.register("echo", endpoint.handler)
+        val snapshot = registry.snapshot("echo")
+        repeat(1_000) { assertSame(snapshot, registry.snapshot("echo")) }
+        registry.register("echo", endpoint.handler)
+        registry.remove("echo", Endpoint().binder)
+        val other = Endpoint()
+        registry.register("other", other.handler)
+        registry.remove("other", other.binder)
+        assertSame(snapshot, registry.snapshot("echo"))
+    }
+
+    @Test
+    fun mutationsPublishNewSnapshotsWithoutChangingInFlightOrder() {
+        val registry = HandlerRegistry()
+        val first = Endpoint()
+        val second = Endpoint()
+        registry.register("echo", first.handler)
+        val before = registry.snapshot("echo")
+        registry.register("echo", second.handler)
+        val registered = registry.snapshot("echo")
+        assertEquals(listOf(first.handler), before)
+        assertEquals(listOf(first.handler, second.handler), registered)
+        registry.remove("echo", first.binder)
+        val removed = registry.snapshot("echo")
+        assertEquals(listOf(first.handler, second.handler), registered)
+        assertEquals(listOf(second.handler), removed)
+        registry.remove("echo", second.binder)
+        assertTrue(registry.snapshot("echo").isEmpty())
+        registry.register("echo", first.handler)
+        assertEquals(listOf(first.handler), registry.snapshot("echo"))
+    }
+
+    @Test
+    fun deathInvalidatesOnlyCurrentSnapshot() {
+        val registry = HandlerRegistry()
+        val first = Endpoint()
+        val second = Endpoint()
+        registry.register("echo", first.handler)
+        registry.register("echo", second.handler)
+        val inFlight = registry.snapshot("echo")
+        first.recipients.single().binderDied()
+        assertEquals(listOf(second.handler), registry.snapshot("echo"))
+        assertEquals(listOf(first.handler, second.handler), inFlight)
+        second.recipients.single().binderDied()
+        assertTrue(registry.snapshot("echo").isEmpty())
+    }
+
+    @Test
+    fun snapshotCannotBeMutatedByConsumer() {
+        val registry = HandlerRegistry()
+        val endpoint = Endpoint()
+        registry.register("echo", endpoint.handler)
+        @Suppress("UNCHECKED_CAST")
+        val snapshot = registry.snapshot("echo") as MutableList<ICallHandler>
+        assertThrows(UnsupportedOperationException::class.java) { snapshot.clear() }
+        assertEquals(listOf(endpoint.handler), registry.snapshot("echo"))
+    }
+
+    @Test
+    fun failedRegistrationDoesNotInvalidatePublishedSnapshot() {
+        val registry = HandlerRegistry()
+        val first = Endpoint()
+        registry.register("echo", first.handler)
+        val snapshot = registry.snapshot("echo")
+        val failed = Endpoint().apply { rejectLink = true }
+        assertThrows(RemoteException::class.java) { registry.register("echo", failed.handler) }
+        assertSame(snapshot, registry.snapshot("echo"))
+        failed.rejectLink = false
+        registry.register("echo", failed.handler)
+        assertEquals(listOf(first.handler, failed.handler), registry.snapshot("echo"))
+        assertEquals(listOf(first.handler), snapshot)
+    }
+
+    @Test
     fun concurrentRegisterAndRemoveLeaveNoRecordAfterFinalRemoval() {
         val registry = HandlerRegistry()
         val endpoint = Endpoint()

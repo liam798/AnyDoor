@@ -3,6 +3,7 @@ package com.anydoor.internal
 import android.net.Uri
 import android.content.Context
 import android.os.IBinder
+import android.os.DeadObjectException
 import com.anydoor.internal.ipc.IAnyDoorService
 import com.anydoor.AnyDoorProvider
 
@@ -30,8 +31,23 @@ internal class AnyDoorConnection(private val discover: () -> IBinder?) {
 private fun serviceDiscovery(context: Context): () -> IBinder? {
     val resolver = context.contentResolver
     val uri = Uri.parse("content://${context.packageName}.anydoor")
+    fun discover(): IBinder? {
+        val client = resolver.acquireUnstableContentProviderClient(uri) ?: return null
+        return try {
+            client.call(AnyDoorProvider.METHOD_GET_SERVICE, null, null)
+                ?.getBinder(AnyDoorProvider.KEY_SERVICE)
+        } finally {
+            // 最低 API 23；不持有稳定 Provider 依赖，避免中心死亡连带终止调用进程。
+            @Suppress("DEPRECATION")
+            client.release()
+        }
+    }
     return {
-        resolver.call(uri, AnyDoorProvider.METHOD_GET_SERVICE, null, null)
-            ?.getBinder(AnyDoorProvider.KEY_SERVICE)
+        try {
+            discover()
+        } catch (_: DeadObjectException) {
+            // 只重试无副作用的 Binder 发现一次，不重放任何业务请求。
+            discover()
+        }
     }
 }

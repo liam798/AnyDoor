@@ -57,7 +57,8 @@ internal class AnyDoorService(
                 }
             } catch (e: RemoteException) {
                 if (!handler.asBinder().isBinderAlive) registry.remove(id, handler.asBinder())
-                else throw e
+                // 通信失败不能证明业务未执行，不向下一个处理器重复投递。
+                throw e
             }
         }
         return null
